@@ -4,12 +4,13 @@ Classe principal para ingestão de CSV em banco de dados.
 
 import pandas as pd
 import time
+import re
 from datetime import datetime
 from typing import Optional, Dict, List
 from pathlib import Path
 from sqlalchemy import create_engine, MetaData, Table, inspect, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, ProgrammingError
 
 from .models import (
     IngestionConfig,
@@ -255,20 +256,83 @@ class CsvToDatabaseLoader:
             raise
 
     def _read_csv(self):
-        """Lê o arquivo CSV."""
+        """Lê o arquivo CSV com auto-detecção de separador."""
         csv_path = Path(self.config.csv_path)
         
         if not csv_path.exists():
             raise FileNotFoundError(f"Arquivo CSV não encontrado: {self.config.csv_path}")
         
         try:
+            # Tenta com o separador configurado
             self.df = pd.read_csv(
                 csv_path,
                 sep=self.config.csv_separator,
                 encoding=self.config.csv_encoding,
             )
+            
+            # Se tiver apenas 1 coluna, pode ser separador errado
+            if len(self.df.columns) == 1:
+                self.logger.warning(f"Apenas 1 coluna detectada com separador '{self.config.csv_separator}'. Tentando auto-detectar...")
+                
+                # Tenta detectar o separador correto
+                separadores = [';', '\t', '|', ',']
+                for sep in separadores:
+                    try:
+                        df_test = pd.read_csv(
+                            csv_path,
+                            sep=sep,
+                            encoding=self.config.csv_encoding,
+                            nrows=5
+                        )
+                        if len(df_test.columns) > 1:
+                            self.logger.info(f"✓ Separador correto detectado: '{sep}'")
+                            self.df = pd.read_csv(
+                                csv_path,
+                                sep=sep,
+                                encoding=self.config.csv_encoding,
+                            )
+                            self.config.csv_separator = sep
+                            break
+                    except:
+                        continue
+            
+            # Sanitiza nomes de colunas
+            self.df.columns = self._sanitize_column_names(self.df.columns)
+            
+        except UnicodeDecodeError as e:
+            # Tenta outros encodings
+            self.logger.warning(f"Erro de encoding com '{self.config.csv_encoding}'. Tentando outros...")
+            encodings = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
+            
+            for enc in encodings:
+                try:
+                    self.df = pd.read_csv(
+                        csv_path,
+                        sep=self.config.csv_separator,
+                        encoding=enc,
+                    )
+                    self.logger.info(f"✓ Encoding correto: '{enc}'")
+                    self.config.csv_encoding = enc
+                    break
+                except:
+                    continue
+            else:
+                raise ValueError(f"Não foi possível ler o CSV com nenhum encoding testado: {str(e)}")
+        
         except Exception as e:
             raise ValueError(f"Erro ao ler CSV: {str(e)}")
+    
+    def _sanitize_column_names(self, columns):
+        """Sanitiza nomes de colunas para evitar problemas no banco."""
+        sanitized = []
+        for col in columns:
+            # Remove espaços extras
+            col = str(col).strip()
+            # Remove caracteres especiais problemáticos
+            # Mas mantém underscore e hífen
+            # col = re.sub(r'[^\w\s-]', '', col)
+            sanitized.append(col)
+        return sanitized
 
     def _analyze_csv(self):
         """Analisa o CSV e infere tipos."""
@@ -367,7 +431,7 @@ class CsvToDatabaseLoader:
 
     def _insert_data(self) -> int:
         """
-        Insere dados no banco em chunks.
+        Insere dados no banco em chunks com retry automático.
         
         Returns:
             Número de linhas inseridas
@@ -379,36 +443,76 @@ class CsvToDatabaseLoader:
         if self.config.if_exists == IfExistsStrategy.REPLACE:
             # Trunca a tabela primeiro
             self.logger.info(f"  Truncando tabela {self.config.schema}.{self.config.table_name}...")
-            with self.engine.begin() as conn:
-                conn.execute(
-                    text(f'TRUNCATE TABLE "{self.config.schema}"."{self.config.table_name}"')
-                )
+            try:
+                with self.engine.begin() as conn:
+                    conn.execute(
+                        text(f'TRUNCATE TABLE "{self.config.schema}"."{self.config.table_name}"')
+                    )
+            except Exception as e:
+                self.logger.warning(f"  Erro ao truncar (tabela pode não existir): {str(e)}")
         
         # Insere em chunks
         for i, chunk_start in enumerate(range(0, len(self.df), self.config.chunk_size)):
             chunk_end = min(chunk_start + self.config.chunk_size, len(self.df))
             chunk_df = self.df.iloc[chunk_start:chunk_end]
             
-            try:
-                chunk_df.to_sql(
-                    name=self.config.table_name,
-                    schema=self.config.schema,
-                    con=self.engine,
-                    if_exists="append",
-                    index=False,
-                    method="multi",
-                )
-                
-                total_inserted += len(chunk_df)
-                
-                self.logger.info(
-                    f"  Chunk {i+1}/{total_chunks}: {len(chunk_df)} linhas "
-                    f"({total_inserted}/{len(self.df)} total)"
-                )
-                
-            except SQLAlchemyError as e:
-                self.logger.error(f"  ❌ Erro no chunk {i+1}: {str(e)}")
-                raise
+            # Tenta inserir com retry
+            max_retries = 3
+            for retry in range(max_retries):
+                try:
+                    chunk_df.to_sql(
+                        name=self.config.table_name,
+                        schema=self.config.schema,
+                        con=self.engine,
+                        if_exists="append",
+                        index=False,
+                        method="multi",
+                    )
+                    
+                    total_inserted += len(chunk_df)
+                    
+                    self.logger.info(
+                        f"  Chunk {i+1}/{total_chunks}: {len(chunk_df)} linhas "
+                        f"({total_inserted}/{len(self.df)} total)"
+                    )
+                    break  # Sucesso, sai do retry loop
+                    
+                except ProgrammingError as e:
+                    error_msg = str(e)
+                    
+                    # Erro de coluna não existente
+                    if "não existe a coluna" in error_msg or "column" in error_msg.lower():
+                        self.logger.error(f"  ❌ Erro de schema: {error_msg}")
+                        self.logger.error(f"  💡 Colunas do DataFrame: {list(chunk_df.columns)}")
+                        
+                        # Se create_table está habilitado, tenta criar
+                        if self.config.create_table:
+                            self.logger.info("  🔧 Tentando criar tabela automaticamente...")
+                            try:
+                                self._create_table()
+                                self.logger.info("  ✓ Tabela criada. Tentando inserir novamente...")
+                                continue  # Retry
+                            except Exception as create_error:
+                                self.logger.error(f"  ❌ Erro ao criar tabela: {str(create_error)}")
+                                raise
+                        else:
+                            raise
+                    else:
+                        # Outro erro de programação
+                        if retry < max_retries - 1:
+                            self.logger.warning(f"  ⚠️ Tentativa {retry+1}/{max_retries} falhou. Tentando novamente...")
+                            time.sleep(1)  # Aguarda 1 segundo
+                        else:
+                            self.logger.error(f"  ❌ Erro no chunk {i+1} após {max_retries} tentativas: {error_msg}")
+                            raise
+                            
+                except SQLAlchemyError as e:
+                    if retry < max_retries - 1:
+                        self.logger.warning(f"  ⚠️ Tentativa {retry+1}/{max_retries} falhou: {str(e)}")
+                        time.sleep(1)
+                    else:
+                        self.logger.error(f"  ❌ Erro no chunk {i+1} após {max_retries} tentativas: {str(e)}")
+                        raise
         
         return total_inserted
 

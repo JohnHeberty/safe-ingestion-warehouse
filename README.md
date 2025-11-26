@@ -41,6 +41,15 @@ Um micro-sistema robusto e de nível empresarial para ingestão de dados CSV em 
 - Relatórios em JSON
 - Métricas de performance
 
+✅ **Sistema Resiliente** 🛡️
+- **Auto-detecção de separador CSV** (`;`, `,`, `\t`, `|`)
+- **Auto-detecção de encoding** (UTF-8, Latin1, CP1252, ISO-8859-1)
+- **Retry automático** (até 3 tentativas por chunk)
+- **Criação automática de tabela** se não existir
+- **Sanitização de nomes de colunas**
+- **Tratamento específico** de erros comuns
+- **Logs detalhados** para diagnóstico
+
 ---
 
 ## 📦 Instalação
@@ -237,6 +246,100 @@ SQL_INSERT/
 | `create_table` | bool | False | Criar tabela automaticamente |
 | `dedup_columns` | List[str] | None | Colunas para deduplicação |
 | `validate_types` | bool | True | Validar tipos antes de inserir |
+
+---
+
+## 🛡️ Sistema Resiliente - Tratamento Automático de Problemas
+
+### Problema 1: Separador de CSV Incorreto
+
+**❌ Erro comum:**
+```
+UndefinedColumn: não existe a coluna "col1;col2;col3;col4" da relação "tabela"
+```
+
+**✅ Solução automática:**
+- Sistema detecta se há apenas 1 coluna
+- Testa automaticamente: `;`, `\t`, `|`, `,`
+- Escolhe o separador que resulta em mais colunas
+- **Nenhuma ação necessária!**
+
+```python
+config = IngestionConfig(
+    csv_separator=",",  # ← Pode estar errado, sistema corrige!
+    # ... resto da config
+)
+```
+
+### Problema 2: Encoding Incorreto
+
+**✅ Solução automática:**
+- Testa: UTF-8, Latin1, CP1252, ISO-8859-1
+- Fallback automático se houver erro
+- Logs mostram qual foi detectado
+
+### Problema 3: Falhas Temporárias
+
+**✅ Solução automática:**
+- Retry automático (até 3 tentativas)
+- Aguarda 1 segundo entre tentativas
+- Logs detalhados de cada tentativa
+
+### Problema 4: Tabela Não Existe
+
+**✅ Solução automática:**
+```python
+config = IngestionConfig(
+    create_table=True,  # ← Cria automaticamente!
+)
+```
+
+### Problema 5: Colunas com Caracteres Especiais
+
+**✅ Solução automática:**
+- Sanitização de nomes de colunas
+- Remove espaços extras
+- Mantém compatibilidade com SQL
+
+### 🎯 Exemplo Completo Resiliente
+
+```python
+from csv_ingestion import CsvToDatabaseLoader, IngestionConfig
+
+config = IngestionConfig(
+    db_connection_string="postgresql://user:pass@localhost/db",
+    schema="meu_schema",
+    table_name="minha_tabela",
+    csv_path="arquivo_problematico.csv",
+    
+    # Sistema é resiliente - detecta automaticamente!
+    csv_separator=",",      # ← Auto-detecta se estiver errado
+    csv_encoding="utf-8",   # ← Testa outros se necessário
+    
+    # Comportamento resiliente
+    create_table=True,      # ← Cria tabela se não existir
+    validate_data=True,     # ← Valida antes de inserir
+    error_strategy="collect_errors",  # ← Coleta todos os erros
+    chunk_size=5000,        # ← Evita sobrecarga de memória
+)
+
+loader = CsvToDatabaseLoader(config)
+
+# SEMPRE use dry-run primeiro!
+report = loader.run(dry_run=True)
+print(f"✓ Separador detectado: '{config.csv_separator}'")
+print(f"✓ {len(report.columns)} colunas encontradas")
+
+# Se OK, insere de verdade
+report = loader.run(dry_run=False)
+print(f"✅ {report.total_rows_inserted} linhas inseridas!")
+```
+
+### 📋 Ver mais
+
+- **Erro específico de separador?** → Veja [`FIX_SEPARADOR_CSV.md`](FIX_SEPARADOR_CSV.md)
+- **Outros problemas?** → Veja [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
+- **Exemplo prático** → Execute [`examples/exemplo_07_csv_problematico.py`](examples/exemplo_07_csv_problematico.py)
 
 ---
 

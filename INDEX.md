@@ -72,6 +72,11 @@ Todos em: [examples/](examples/)
    - Estratégias fail_fast vs collect_errors
    - Tratamento de erros
 
+7. [exemplo_07_csv_problematico.py](examples/exemplo_07_csv_problematico.py) - **NOVO! 🛡️**
+   - CSV com separador incorreto
+   - Auto-detecção e resiliência
+   - Retry automático
+
 ---
 
 ## 🧪 TESTES
@@ -126,11 +131,16 @@ pytest --cov=csv_ingestion      # Com cobertura
 ### Quero tratar erros sem parar tudo
 → [exemplo_06_tratamento_erros.py](examples/exemplo_06_tratamento_erros.py)
 
+### CSV com separador errado ou encoding incorreto 🛡️
+→ [exemplo_07_csv_problematico.py](examples/exemplo_07_csv_problematico.py)
+→ [FIX_SEPARADOR_CSV.md](FIX_SEPARADOR_CSV.md)
+
 ### Estou migrando do df.to_sql()
 → [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)
 
 ### Estou tendo problemas
 → [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+→ [FIX_SEPARADOR_CSV.md](FIX_SEPARADOR_CSV.md) (erro de coluna)
 
 ---
 

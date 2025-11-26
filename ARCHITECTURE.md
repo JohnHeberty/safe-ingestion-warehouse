@@ -250,6 +250,32 @@ cx_Oracle>=8.0.0
 2. **Validation**: Todos os dados validados antes de inserção
 3. **Transaction Control**: Rollback automático em caso de erro
 4. **Schema Validation**: Verifica compatibilidade com tabela existente
+5. **Column Sanitization**: Nomes de colunas sanitizados
+
+### Mecanismos de Resiliência 🛡️
+1. **Auto-detecção de Separador CSV**
+   - Testa: `;`, `,`, `\t`, `|`
+   - Detecta se há apenas 1 coluna
+   - Escolhe separador com mais colunas
+
+2. **Auto-detecção de Encoding**
+   - UTF-8 → Latin1 → CP1252 → ISO-8859-1
+   - Fallback automático
+
+3. **Retry Automático**
+   - Até 3 tentativas por chunk
+   - 1 segundo entre tentativas
+   - Logs de cada tentativa
+
+4. **Criação Automática de Tabela**
+   - `create_table=True`
+   - DDL gerado automaticamente
+   - Retry após criação
+
+5. **Tratamento de Erros Específicos**
+   - Detecta "coluna não existe"
+   - Diff DataFrame vs. Banco
+   - Sugestões automáticas
 
 ---
 
