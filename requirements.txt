@@ -1,0 +1,26 @@
+# CSV to Database Ingestion System
+# Requirements / Dependências
+
+# Core dependencies
+sqlalchemy>=2.0.0
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Database drivers (instale conforme necessário)
+# PostgreSQL
+psycopg2-binary>=2.9.0
+
+# MySQL (opcional)
+# pymysql>=1.1.0
+
+# SQL Server (opcional)
+# pyodbc>=4.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Development
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.5.0
